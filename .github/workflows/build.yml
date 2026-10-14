@@ -1,31 +1,84 @@
-name: Build .deb
+
+name: Build iOS26Anim
+
 on:
-  push:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
 jobs:
   build:
-    runs-on: macos-latest
+    name: Build rootless Debian package
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            clang \
+            make \
+            perl \
+            git \
+            curl \
+            python3 \
+            ldid \
+            dpkg-dev \
+            unzip \
+            xz-utils \
+            libplist-utils
+
       - name: Install Theos
         run: |
-          git clone --recursive https://github.com/theos/theos.git $HOME/theos
-          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
+          git clone --recursive \
+            https://github.com/theos/theos.git \
+            "$HOME/theos"
+          echo "THEOS=$HOME/theos" >> "$GITHUB_ENV"
+          echo "$HOME/theos/bin" >> "$GITHUB_PATH"
+
       - name: Install iOS 16.5 SDK
         run: |
-          cd $HOME/theos/sdks
-          git clone --depth=1 --filter=blob:none --no-checkout https://github.com/xybp888/iOS-SDKs.git
-          cd iOS-SDKs
-          git sparse-checkout init --cone
-          git sparse-checkout set iPhoneOS16.5.sdk
-          git checkout
-          mv iPhoneOS16.5.sdk ..
-          cd .. && rm -rf iOS-SDKs
-      - name: Install ldid
-        run: brew install ldid
-      - name: Build
-        run: make package FINALPACKAGE=1
-      - uses: actions/upload-artifact@v4
+          mkdir -p "$HOME/theos/sdks"
+          curl -fL \
+            https://github.com/theos/sdks/archive/refs/heads/master.zip \
+            -o /tmp/sdks.zip
+          unzip -q /tmp/sdks.zip \
+            'sdks-master/iPhoneOS16.5.sdk/*' \
+            -d /tmp
+          mv /tmp/sdks-master/iPhoneOS16.5.sdk \
+            "$HOME/theos/sdks/iPhoneOS16.5.sdk"
+
+      - name: Verify project files
+        run: |
+          test -f Makefile || {
+            echo "::error::Makefile not found in repository root"
+            exit 1
+          }
+          test -f Tweak.x || {
+            echo "::error::Tweak.x not found in repository root"
+            exit 1
+          }
+
+      - name: Build rootless package
+        run: |
+          make clean
+          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless
+
+      - name: Upload Debian package
+        uses: actions/upload-artifact@v4
         with:
-          name: iOS26Anim-deb
+          name: iOS26Anim-rootless-deb
           path: packages/*.deb
+          if-no-files-found: error
+          retention-days: 14
